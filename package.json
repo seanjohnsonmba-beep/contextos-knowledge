@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "sync": "node src/sync.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
