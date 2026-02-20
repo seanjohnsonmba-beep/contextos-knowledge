@@ -3,113 +3,110 @@
   "nodes": [
     {
       "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "minutes",
-              "minutesInterval": 5
-            }
-          ]
-        }
-      },
-      "id": "a1b2c3d4-0001-0001-0001-000000000001",
-      "name": "Every 5 Minutes",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.1,
-      "position": [240, 300]
-    },
-    {
-      "parameters": {
         "httpMethod": "POST",
         "path": "contextos-sync",
-        "responseMode": "lastNode",
+        "responseMode": "responseNode",
         "options": {}
       },
-      "id": "a1b2c3d4-0001-0001-0001-000000000002",
-      "name": "Webhook Trigger",
+      "id": "node-webhook",
+      "name": "Receive File",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [240, 480],
+      "typeVersion": 2,
+      "position": [240, 300],
       "webhookId": "contextos-sync"
     },
     {
       "parameters": {
-        "command": "node \"C:\\Users\\SeanRobertJohnson\\Documents\\ContextOS\\src\\sync.js\""
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst { filePath, content, folder } = body;\n\nfunction parseFrontmatter(text) {\n  const match = text.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---/);\n  if (!match) return { frontmatter: {}, bodyText: text.trim() };\n  const bodyText = text.slice(match[0].length).trim();\n  const fm = {};\n  for (const line of match[1].split('\\n')) {\n    const ci = line.indexOf(':');\n    if (ci === -1) continue;\n    const key = line.slice(0, ci).trim();\n    let val = line.slice(ci + 1).trim();\n    if (!val) continue;\n    const q = val.charCodeAt(0);\n    if (val.startsWith('[') && val.endsWith(']')) {\n      val = val.slice(1, -1).split(',').map(function(v) {\n        v = v.trim();\n        var qc = v.charCodeAt(0);\n        return (qc === 34 || qc === 39) && v[0] === v[v.length - 1] ? v.slice(1, -1) : v;\n      }).filter(Boolean);\n    } else if ((q === 34 || q === 39) && val[0] === val[val.length - 1]) {\n      val = val.slice(1, -1);\n    }\n    fm[key] = val;\n  }\n  return { frontmatter: fm, bodyText };\n}\n\nfunction slugify(str) {\n  return str.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');\n}\n\nfunction getTable(f) {\n  if (f.includes('10-Deep-Knowledge')) return 'deep_knowledge';\n  if (f.includes('20-Concepts')) return 'atomic_concepts';\n  if (f.includes('30-Meetings')) return 'raw_meeting_intelligence';\n  return null;\n}\n\nconst { frontmatter, bodyText } = parseFrontmatter(content || '');\nconst table = getTable(folder || filePath || '');\nconst filename = (filePath || '').split(/[/\\\\]/).pop().replace(/\\.md$/, '');\n\nif (!table) {\n  return [{ json: { skipped: true, reason: 'No matching table', filePath } }];\n}\n\nlet record;\nif (table === 'deep_knowledge') {\n  const id = frontmatter.id || slugify(frontmatter.title || filename);\n  record = {\n    id,\n    title: frontmatter.title || filename,\n    subtitle: frontmatter.subtitle || null,\n    author: frontmatter.author || null,\n    source_type: frontmatter.source_type || 'obsidian',\n    category: frontmatter.category || null,\n    role_focus: frontmatter.role_focus || null,\n    raw_content: bodyText,\n    metadata: {\n      tags: Array.isArray(frontmatter.tags) ? frontmatter.tags : [],\n      topic_primary: frontmatter.topic_primary || null,\n      difficulty_tier: frontmatter.difficulty_tier || null,\n    },\n    published_date: frontmatter.published_date || null,\n    source_filename: filename + '.md',\n    source_batch: 'obsidian_sync',\n  };\n} else if (table === 'atomic_concepts') {\n  record = {\n    concept_name: frontmatter.concept_name || frontmatter.title || filename,\n    summary: bodyText.split('\\n').find(function(l) { return l.trim(); }) || bodyText.slice(0, 300),\n    tags: Array.isArray(frontmatter.tags) ? frontmatter.tags : [],\n  };\n} else {\n  record = {\n    meeting_id: frontmatter.meeting_id || slugify(frontmatter.title || filename),\n    source_relpath: (filePath || '').replace(/\\\\/g, '/'),\n    payload: bodyText,\n  };\n}\n\nreturn [{ json: { table, record, filePath, skipped: false } }];"
       },
-      "id": "a1b2c3d4-0001-0001-0001-000000000003",
-      "name": "Run Sync Script",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
-      "position": [500, 380]
+      "id": "node-parse",
+      "name": "Parse & Build Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
     },
     {
       "parameters": {
         "conditions": {
-          "number": [
+          "boolean": [
             {
-              "value1": "={{ $json.exitCode }}",
-              "operation": "equal",
-              "value2": 0
+              "value1": "={{ $json.skipped }}",
+              "value2": true
             }
           ]
         }
       },
-      "id": "a1b2c3d4-0001-0001-0001-000000000004",
-      "name": "Sync Succeeded?",
+      "id": "node-if",
+      "name": "Is Skipped?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [740, 380]
+      "position": [720, 300]
     },
     {
       "parameters": {
-        "jsCode": "const stdout = $input.first().json.stdout || '';\nconst lines = stdout.trim().split('\\n');\nconst synced = lines.filter(l => l.startsWith('✓')).length;\nconsole.log(`Vault sync complete: ${synced} records upserted`);\nconsole.log(stdout);\nreturn [{ json: { success: true, synced, output: stdout } }];"
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ skipped: true, filePath: $json.filePath }) }}"
       },
-      "id": "a1b2c3d4-0001-0001-0001-000000000005",
-      "name": "Log Success",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [980, 280]
+      "id": "node-resp-skip",
+      "name": "Respond Skipped",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 160]
     },
     {
       "parameters": {
-        "jsCode": "const stderr = $input.first().json.stderr || '';\nconst stdout = $input.first().json.stdout || '';\nconsole.error('Vault sync failed');\nconsole.error(stderr || stdout);\nreturn [{ json: { success: false, error: stderr || stdout } }];"
+        "method": "POST",
+        "url": "={{ $vars.SUPABASE_URL + '/rest/v1/' + $json.table }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $vars.SUPABASE_KEY }}" },
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $vars.SUPABASE_KEY }}" },
+            { "name": "Prefer", "value": "resolution=merge-duplicates" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.record }}",
+        "options": {}
       },
-      "id": "a1b2c3d4-0001-0001-0001-000000000006",
-      "name": "Log Error",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [980, 480]
+      "id": "node-http",
+      "name": "Upsert to Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 440]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, table: $('Parse & Build Record').first().json.table, filePath: $('Parse & Build Record').first().json.filePath }) }}"
+      },
+      "id": "node-resp-ok",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 440]
     }
   ],
   "connections": {
-    "Every 5 Minutes": {
+    "Receive File": {
+      "main": [[{ "node": "Parse & Build Record", "type": "main", "index": 0 }]]
+    },
+    "Parse & Build Record": {
+      "main": [[{ "node": "Is Skipped?", "type": "main", "index": 0 }]]
+    },
+    "Is Skipped?": {
       "main": [
-        [{ "node": "Run Sync Script", "type": "main", "index": 0 }]
+        [{ "node": "Respond Skipped", "type": "main", "index": 0 }],
+        [{ "node": "Upsert to Supabase", "type": "main", "index": 0 }]
       ]
     },
-    "Webhook Trigger": {
-      "main": [
-        [{ "node": "Run Sync Script", "type": "main", "index": 0 }]
-      ]
-    },
-    "Run Sync Script": {
-      "main": [
-        [{ "node": "Sync Succeeded?", "type": "main", "index": 0 }]
-      ]
-    },
-    "Sync Succeeded?": {
-      "main": [
-        [{ "node": "Log Success", "type": "main", "index": 0 }],
-        [{ "node": "Log Error", "type": "main", "index": 0 }]
-      ]
+    "Upsert to Supabase": {
+      "main": [[{ "node": "Respond Success", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner"
-  },
-  "meta": {
-    "notes": "Triggers: (1) schedule every 5 min, (2) POST webhook at /webhook/contextos-sync for real-time file-watcher integration. Requires n8n to run on the same machine as the vault, or adjust the command path accordingly."
+    "saveManualExecutions": true
   }
 }
